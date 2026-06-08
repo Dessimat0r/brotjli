@@ -43,15 +43,11 @@ public final class ContextDecoder {
     }
 
     private int computeUtf8Context(int p1, int p2) {
-        if (p1 < 0) p1 += 256;
-        if (p2 < 0) p2 += 256;
-        return Lut0[p1] | Lut1[p2];
+        return Lut0[p1 & 0xFF] | Lut1[p2 & 0xFF];
     }
 
     private int computeSignedContext(int p1, int p2) {
-        if (p1 < 0) p1 += 256;
-        if (p2 < 0) p2 += 256;
-        return (Lut2[p1] << 3) | Lut2[p2];
+        return (Lut2[p1 & 0xFF] << 3) | Lut2[p2 & 0xFF];
     }
 
     public int getContextMode() { return contextMode; }

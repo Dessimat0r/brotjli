@@ -15,11 +15,11 @@ public final class HuffmanDecoder {
     private static final int TABLE_BITS = 10;
     private static final int TABLE_SIZE = 1 << TABLE_BITS;
     private static final int MAX_SUBTABLE_BITS = 5;
-    private static final int ENTRY_MASK_SYMBOL = 0x000001FF;
-    private static final int ENTRY_SHIFT_BITS = 9;
-    private static final int ENTRY_MASK_BITS = 0x0001E000;
-    private static final int ENTRY_SHIFT_FLAG = 14;
-    private static final int ENTRY_MASK_FLAG = 0x00004000;
+    private static final int ENTRY_MASK_SYMBOL = 0x0000FFFF; // 16 bits for symbol/subOff
+    private static final int ENTRY_SHIFT_BITS = 16;
+    private static final int ENTRY_MASK_FLAG = 0x01000000;  // bit 24 for subtable flag
+    private static final int SUBTABLE_MASK_OFFSET = 0x000FFFFF; // 20 bits for subtable offset
+    private static final int SUBTABLE_SHIFT_BITS = 20;
 
     private int[] table;
     private int maxSymbol;
@@ -87,12 +87,12 @@ public final class HuffmanDecoder {
         int entry = table[peek];
 
         if ((entry & ENTRY_MASK_FLAG) != 0) {
-            int subtableOffset = entry & ENTRY_MASK_SYMBOL;
-            int bitsUsed = (entry >>> ENTRY_SHIFT_BITS) & 0xF;
-            int extraBits = bitsUsed - TABLE_BITS;
-            int subIndex = (int)(reader.peekBits(bitsUsed) >>> TABLE_BITS);
+            int subtableOffset = entry & SUBTABLE_MASK_OFFSET;
+            int subBits = (entry >>> SUBTABLE_SHIFT_BITS) & 0xF;
+            int subIndex = (int)((reader.peekBits(TABLE_BITS + subBits) >>> TABLE_BITS) & ((1 << subBits) - 1));
             entry = table[subtableOffset + subIndex];
-            reader.skipBits(bitsUsed);
+            int len = (entry >>> ENTRY_SHIFT_BITS) & 0xF;
+            reader.skipBits(len);
             return entry & ENTRY_MASK_SYMBOL;
         }
 
@@ -198,11 +198,11 @@ public final class HuffmanDecoder {
                 if ((current & ENTRY_MASK_FLAG) == 0) {
                     int subBits = Math.min(len - TABLE_BITS, MAX_SUBTABLE_BITS);
                     int subOff = allocateSubTable(subBits);
-                    int subEntry = subOff | (TABLE_BITS << ENTRY_SHIFT_BITS) | ENTRY_MASK_FLAG;
+                    int subEntry = subOff | (subBits << SUBTABLE_SHIFT_BITS) | ENTRY_MASK_FLAG;
                     table[primaryIndex] = subEntry;
                     current = subEntry;
                 }
-                int subOff = current & ENTRY_MASK_SYMBOL;
+                int subOff = current & SUBTABLE_MASK_OFFSET;
                 int subBits = getSubTableBits(current);
                 int subCode = revCode >>> TABLE_BITS;
                 int subCount = 1 << (subBits - (len - TABLE_BITS));
@@ -223,7 +223,7 @@ public final class HuffmanDecoder {
     }
 
     private int getSubTableBits(int entry) {
-        return (entry >>> ENTRY_SHIFT_BITS) & 0xF;
+        return (entry >>> SUBTABLE_SHIFT_BITS) & 0xF;
     }
 
     private int maxCodeLength(int[] lengths, int alphabetSize) {
@@ -236,6 +236,18 @@ public final class HuffmanDecoder {
 
     private static int reverseBits(int value, int numBits) {
         return Integer.reverse(value) >>> (32 - numBits);
+    }
+
+    /** Read flat prefix code: symCount (16 bits) + code lengths as 4-bit values. */
+    public static HuffmanDecoder readFlatPrefixCode(BitReader reader, int alphabetSize) {
+        int symCount = reader.readBitsInt(16);
+        int[] resultLengths = new int[alphabetSize];
+        for (int i = 0; i < symCount; i++) {
+            resultLengths[i] = reader.readBitsInt(4);
+        }
+        HuffmanDecoder result = new HuffmanDecoder();
+        result.buildFromCodeLengths(resultLengths, alphabetSize);
+        return result;
     }
 
     /** Read a complex prefix code from the bit reader. */

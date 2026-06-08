@@ -94,8 +94,21 @@ public final class Constants {
     public static final int QUALITY_NORMAL = 2;
     public static final int QUALITY_HIGH = 3;
     public static final int MIN_QUALITY = 0;
-    public static final int MAX_QUALITY = 3;
+    public static final int MAX_QUALITY = 11;
 
-    // Window sizes per quality level
-    public static final int[] QUALITY_WBITS = {16, 16, 20, 22}; // 64KB, 64KB, 1MB, 4MB
+    // Window sizes per quality level (RFC 7932)
+    public static final int[] QUALITY_WBITS = {
+        16, // q=0  — 64KB
+        16, // q=1  — 64KB
+        18, // q=2  — 256KB
+        19, // q=3  — 512KB
+        20, // q=4  — 1MB
+        20, // q=5  — 1MB
+        21, // q=6  — 2MB
+        21, // q=7  — 2MB
+        22, // q=8  — 4MB
+        22, // q=9  — 4MB
+        22, // q=10 — 4MB
+        24  // q=11 — 16MB
+    };
 }

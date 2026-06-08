@@ -1,13 +1,15 @@
 package com.brotjli.encoder;
 
+import java.io.OutputStream;
+import java.io.IOException;
 import java.util.Arrays;
 
 /**
  * LSB-first bit writer for Brotli stream encoding.
  *
  * Accumulates bits in a 64-bit buffer and flushes to a byte array
- * as needed. Supports writing integers, variable-length codes,
- * and aligning to byte boundaries.
+ * or OutputStream as needed. Supports writing integers, variable-length
+ * codes, and aligning to byte boundaries.
  */
 public final class BitWriter {
     private static final int INITIAL_CAPACITY = 4096;
@@ -16,6 +18,8 @@ public final class BitWriter {
     private int byteOffset;
     private long accumulator;
     private int bitsInAccumulator;
+
+    private OutputStream outputStream;
 
     public BitWriter() {
         this.buffer = new byte[INITIAL_CAPACITY];
@@ -29,6 +33,16 @@ public final class BitWriter {
         this.byteOffset = 0;
         this.accumulator = 0;
         this.bitsInAccumulator = 0;
+    }
+
+    public BitWriter(OutputStream out) {
+        this();
+        this.outputStream = out;
+    }
+
+    public BitWriter(OutputStream out, int initialCapacity) {
+        this(initialCapacity);
+        this.outputStream = out;
     }
 
     /**
@@ -105,10 +119,23 @@ public final class BitWriter {
 
     /**
      * Get the written data as a byte array.
+     * Flushes any pending bits. Does not include data already
+     * written to an OutputStream.
      */
     public byte[] toByteArray() {
         flush();
         return Arrays.copyOf(buffer, byteOffset);
+    }
+
+    /**
+     * Write all buffered data to an OutputStream and reset.
+     */
+    public void writeTo(OutputStream out) throws IOException {
+        flush();
+        if (byteOffset > 0) {
+            out.write(buffer, 0, byteOffset);
+            byteOffset = 0;
+        }
     }
 
     /**
@@ -134,22 +161,58 @@ public final class BitWriter {
         bitsInAccumulator = 0;
     }
 
+    /**
+     * Set the OutputStream for streaming writes.
+     * Subsequent full-byte flushes will be written to this stream.
+     */
+    public void setOutputStream(OutputStream out) {
+        flushAccumulatorToBuffer();
+        this.outputStream = out;
+    }
+
     private void flushOneByte() {
-        ensureCapacity(byteOffset + 1);
-        buffer[byteOffset++] = (byte) (accumulator & 0xFF);
-        accumulator >>>= 8;
-        bitsInAccumulator -= 8;
+        if (outputStream != null) {
+            try {
+                outputStream.write((int) (accumulator & 0xFF));
+                accumulator >>>= 8;
+                bitsInAccumulator -= 8;
+            } catch (IOException e) {
+                throw new RuntimeException("Error writing to output stream", e);
+            }
+        } else {
+            ensureCapacity(byteOffset + 1);
+            buffer[byteOffset++] = (byte) (accumulator & 0xFF);
+            accumulator >>>= 8;
+            bitsInAccumulator -= 8;
+        }
     }
 
     private void flushAccumulator() {
+        flushAccumulatorToBuffer();
+    }
+
+    private void flushAccumulatorToBuffer() {
         int bytesToFlush = (bitsInAccumulator + 7) / 8;
-        ensureCapacity(byteOffset + bytesToFlush);
-        for (int i = 0; i < bytesToFlush; i++) {
-            buffer[byteOffset++] = (byte) (accumulator & 0xFF);
-            accumulator >>>= 8;
+        if (outputStream != null) {
+            try {
+                for (int i = 0; i < bytesToFlush; i++) {
+                    outputStream.write((int) (accumulator & 0xFF));
+                    accumulator >>>= 8;
+                }
+                bitsInAccumulator = 0;
+                accumulator = 0;
+            } catch (IOException e) {
+                throw new RuntimeException("Error writing to output stream", e);
+            }
+        } else {
+            ensureCapacity(byteOffset + bytesToFlush);
+            for (int i = 0; i < bytesToFlush; i++) {
+                buffer[byteOffset++] = (byte) (accumulator & 0xFF);
+                accumulator >>>= 8;
+            }
+            bitsInAccumulator = 0;
+            accumulator = 0;
         }
-        bitsInAccumulator = 0;
-        accumulator = 0;
     }
 
     private void ensureCapacity(int needed) {

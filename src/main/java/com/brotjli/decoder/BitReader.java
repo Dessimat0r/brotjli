@@ -158,10 +158,8 @@ public final class BitReader {
     }
 
     private void refillAccumulator() {
-        int bytesToRead = Math.min(
-            (ACCUMULATOR_CAPACITY - bitsInAccumulator + 7) / 8,
-            bufferLimit - bufferOffset
-        );
+        int maxRoom = Math.max(0, (ACCUMULATOR_CAPACITY - bitsInAccumulator) / 8);
+        int bytesToRead = Math.min(maxRoom, bufferLimit - bufferOffset);
         for (int i = 0; i < bytesToRead; i++) {
             long b = buffer[bufferOffset++] & 0xFFL;
             accumulator |= b << bitsInAccumulator;

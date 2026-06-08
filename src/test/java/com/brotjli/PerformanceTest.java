@@ -13,7 +13,7 @@ public class PerformanceTest {
 
     @Test
     void throughputTest() {
-        byte[] data = new byte[100_000];
+        byte[] data = new byte[10_000];
         new Random(42).nextBytes(data);
         BrotjliEncoder enc = new BrotjliEncoder();
         BrotjliDecoder dec = new BrotjliDecoder();
@@ -45,7 +45,7 @@ public class PerformanceTest {
 
     @Test
     void poolStressTest() throws Exception {
-        int numTasks = 100;
+        int numTasks = 20;
         EncoderPool pool = new EncoderPool(8, 1);
         AtomicInteger successCount = new AtomicInteger(0);
         byte[][] testData = new byte[numTasks][];

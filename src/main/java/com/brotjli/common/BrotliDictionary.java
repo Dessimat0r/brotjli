@@ -49,6 +49,14 @@ public final class BrotliDictionary {
         return Arrays.copyOfRange(Holder.data, offset, offset + length);
     }
 
+    /**
+     * Get a word as a read-only ByteBuffer view into the dictionary (zero-copy).
+     */
+    public static ByteBuffer getWordBuffer(int length, int index) {
+        int offset = Constants.DICTIONARY_OFFSETS[length] + index * length;
+        return ByteBuffer.wrap(Holder.data, offset, length).asReadOnlyBuffer();
+    }
+
     public static void getWord(byte[] dest, int destPos, int length, int index) {
         int offset = Constants.DICTIONARY_OFFSETS[length] + index * length;
         System.arraycopy(Holder.data, offset, dest, destPos, length);

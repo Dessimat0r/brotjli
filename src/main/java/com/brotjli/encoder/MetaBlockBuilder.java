@@ -67,7 +67,7 @@ public final class MetaBlockBuilder {
             if (ic < 8 && cc < 8) return ic * 8 + cc;
             if (ic < 8 && cc >= 8 && cc < 16) return 64 + (cc - 8) * 8 + ic;
             if (ic < 8 && cc >= 16) return 128 + (cc - 16) * 8 + ic;
-            if (ic >= 8 && ic < 16 && cc < 8) return 192 + ic * 8 + cc;
+            if (ic >= 8 && ic < 16 && cc < 8) return 192 + (ic - 8) * 8 + cc;
             if (ic >= 8 && ic < 16 && cc >= 8 && cc < 16) return 256 + (ic - 8) * 8 + (cc - 8);
             if (ic >= 8 && ic < 16 && cc >= 16) return 320 + (ic - 8) * 8 + (cc - 16);
             if (ic >= 16 && cc < 8) return 384 + (ic - 16) * 8 + cc;
@@ -230,56 +230,29 @@ public final class MetaBlockBuilder {
         // Context modes (1 block type)
         writer.writeBits(Constants.CONTEXT_LSB6, 2);
 
-        // NTREES
-        if (quality >= 2) {
-            writeNbltypes(writer, numLitTrees);
-            writeNbltypes(writer, 1);
-        } else {
-            writeNbltypes(writer, 1);
-            writeNbltypes(writer, 1);
-        }
+        // NTREES - always single tree per stream
+        writeNbltypes(writer, 1);
+        writeNbltypes(writer, 1);
 
-        // Context maps
-        if (quality >= 2 && numLitTrees >= 2) {
-            writeContextMap(writer, contextMapArray, numLitTrees);
-        }
-
-        // Write prefix codes
-        if (quality >= 2) {
-            for (int t = 0; t < numLitTrees; t++) {
-                writeSimplePrefixCode(writer, litTrees[t], 256, litFreqs[t]);
-            }
-            writeSimplePrefixCode(writer, icTree, 704, icFreq);
-            writeSimplePrefixCode(writer, distTree, 64, distFreq);
-        } else {
-            simpleLitMap = null;
-            writeSimplePrefixCode(writer, litTree, 256, litFreq);
-            java.util.HashMap<Integer, int[]> savedLitMap = simpleLitMap;
-            writeSimplePrefixCode(writer, icTree, 704, icFreq);
-            writeSimplePrefixCode(writer, distTree, 64, distFreq);
-            simpleLitMap = savedLitMap;
-        }
+        // Write prefix codes - single litTree for all qualities
+        simpleLitMap = null;
+        writeSimplePrefixCode(writer, litTree, 256, litFreq);
+        java.util.HashMap<Integer, int[]> savedLitMap = simpleLitMap;
+        writeSimplePrefixCode(writer, icTree, 704, icFreq);
+        writeSimplePrefixCode(writer, distTree, 64, distFreq);
+        simpleLitMap = savedLitMap;
 
         writeCommands(writer);
     }
 
     private void buildHuffmanTrees() {
-        if (quality >= 2) {
-            for (int t = 0; t < litTrees.length; t++) {
-                litTrees[t].buildFromFrequencies(litFreqs[t], 256);
-            }
-        } else {
-            litTree.buildFromFrequencies(litFreq, 256);
-        }
+        litTree.buildFromFrequencies(litFreq, 256);
 
-        int effectiveIcSize = 704;
         int maxIc = 703;
         while (maxIc > 0 && icFreq[maxIc] == 0) maxIc--;
-        effectiveIcSize = maxIc + 1;
-        icTree.buildFromFrequencies(icFreq, effectiveIcSize);
+        icTree.buildFromFrequencies(icFreq, maxIc + 1);
 
-        int distAlphabetSize = 64;
-        distTree.buildFromFrequencies(distFreq, distAlphabetSize);
+        distTree.buildFromFrequencies(distFreq, 64);
     }
 
     private java.util.HashMap<Integer, int[]> simpleLitMap;
@@ -383,22 +356,19 @@ public final class MetaBlockBuilder {
                 writer.writeBits(cmd.insertLength() - insertBase, insertExtra);
             }
 
+            int copyExtra = cmd.copyExtra();
+            int copyBase = cmd.copyBase();
+            if (copyExtra > 0) {
+                writer.writeBits(cmd.copyLength() - copyBase, copyExtra);
+            }
+
             if (cmd.insertLiterals() != null) {
                 byte[] litData = cmd.insertLiterals();
-                int prevByte = 0;
                 for (byte b : litData) {
                     int sym = b & 0xFF;
                     int code;
                     int litBits;
-
-                    if (quality >= 2 && litTrees != null) {
-                        int ctxId = prevByte & 0x3F;
-                        int treeIdx = (contextMapArray != null && ctxId < contextMapArray.length)
-                            ? contextMapArray[ctxId] : 0;
-                        treeIdx = Math.min(treeIdx, litTrees.length - 1);
-                        code = litTrees[treeIdx].getCode(sym);
-                        litBits = litTrees[treeIdx].getCodeLength(sym);
-                    } else if (simpleLitMap != null && simpleLitMap.containsKey(sym)) {
+                    if (simpleLitMap != null && simpleLitMap.containsKey(sym)) {
                         int[] entry = simpleLitMap.get(sym);
                         code = entry[0];
                         litBits = entry[1];
@@ -406,11 +376,9 @@ public final class MetaBlockBuilder {
                         code = litTree.getCode(sym);
                         litBits = litTree.getCodeLength(sym);
                     }
-
                     if (litBits > 0) {
                         writer.writeBitsReversed(code, litBits);
                     }
-                    prevByte = sym;
                 }
             }
 
@@ -434,24 +402,15 @@ public final class MetaBlockBuilder {
         if (nbltypes == 1) {
             writer.writeBit(0);
         } else if (nbltypes == 2) {
-            writer.writeBits(2, 2); // bits: 1,0
+            writer.writeBits(1, 2);
         } else {
-            // Encode 3-256 using variable-length encoding
-            int encoded = 3;
-            int bits = 2;
-            while (encoded < nbltypes) {
-                encoded <<= 1;
-                bits++;
-            }
-            // Write (bits-2) '1' bits followed by '0'
-            for (int i = 0; i < bits - 2; i++) {
+            writer.writeBits(3, 2);
+            int remaining = nbltypes - 3;
+            while (remaining > 0) {
                 writer.writeBit(1);
+                remaining--;
             }
             writer.writeBit(0);
-            // Write the value
-            if (nbltypes > 3) {
-                writer.writeBits(nbltypes - (1 << (bits - 1)), bits - 2);
-            }
         }
     }
 
@@ -481,9 +440,11 @@ public final class MetaBlockBuilder {
             }
             if (nsym == 4) writer.writeBit(0);
 
-            if (quality == 1) {
+            {
                 if (simpleLitMap == null) simpleLitMap = new java.util.HashMap<>();
-                if (nsym > 1) {
+                if (nsym == 1) {
+                    simpleLitMap.put(symbolList[0], new int[]{0, 0});
+                } else {
                     int[] lens = nsym == 2 ? new int[]{1, 1} :
                         nsym == 3 ? new int[]{1, 2, 2} :
                         new int[]{2, 2, 2, 2};
@@ -513,58 +474,36 @@ public final class MetaBlockBuilder {
                         code++;
                     }
                 }
+                // Rebuild tree with simple codes for correct subsequent encoding
+                int[] fixLens = new int[alphabetSize];
+                for (int i = 0; i < nsym; i++) {
+                    int len = (nsym == 1) ? 0 :
+                              (nsym == 2) ? 1 :
+                              (nsym == 3) ? (i == 0 ? 1 : 2) :
+                              2;
+                    fixLens[symbolList[i]] = len;
+                }
+                tree.buildFromLengths(fixLens, alphabetSize);
             }
         } else {
-            if (quality == 1) simpleLitMap = null;
-            writer.writeBits(0, 2);
+            simpleLitMap = null;
+            writer.writeBits(3, 2);
             writeComplexPrefixCode(writer, tree, alphabetSize);
         }
     }
 
     private void writeComplexPrefixCode(BitWriter writer, HuffmanTreeBuilder tree, int alphabetSize) {
-        // Write hskip = 0 (2 bits)
-        writer.writeBits(0, 2);
-
         int[] lengths = tree.getCodeLengths();
-
         int lastNonZero = -1;
         for (int i = 0; i < alphabetSize; i++) {
             if (lengths[i] > 0) lastNonZero = i;
         }
         if (lastNonZero < 0) return;
-
-        int[] clFreq = new int[19];
-        for (int i = 0; i <= lastNonZero; i++) {
-            int len = lengths[i];
-            if (len < clFreq.length) clFreq[len]++;
-        }
-
-        int[] clCodeLengths = new int[18];
-        buildClCodeLengths(clFreq, clCodeLengths);
-
-        for (int i = 0; i < 18; i++) {
-            int orderSym = Constants.CODE_LENGTH_ORDER[i];
-            writeFixedCodeLengthValue(writer, clCodeLengths[orderSym]);
-        }
-
-        int nonZeroCl = 0;
-        for (int i = 0; i < 18; i++) {
-            if (clCodeLengths[i] > 0) nonZeroCl++;
-        }
-        if (nonZeroCl >= 2) {
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        } else if (nonZeroCl == 1) {
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        } else {
-            clCodeLengths[0] = 1;
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        }
-
-        // Write encoded symbol count so the decoder reads exactly this many
         int symCount = lastNonZero + 1;
         writer.writeBits(symCount, 16);
-
-        encodeLengthsWithClTree(writer, clTreeReusable, lengths, lastNonZero);
+        for (int i = 0; i < symCount; i++) {
+            writer.writeBits(Math.min(lengths[i], 15), 4);
+        }
     }
 
     private void buildClCodeLengths(int[] clFreq, int[] clCodeLengths) {
@@ -773,6 +712,7 @@ public final class MetaBlockBuilder {
         literalCount = 0;
         commandCount = 0;
         totalOutputSize = 0;
+        simpleLitMap = null;
         Arrays.fill(litFreq, 0);
         Arrays.fill(icFreq, 0);
         Arrays.fill(distFreq, 0);

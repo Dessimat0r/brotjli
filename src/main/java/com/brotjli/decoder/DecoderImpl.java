@@ -545,20 +545,13 @@ public final class DecoderImpl {
     // ========== Helper methods for bitstream parsing ==========
 
     private int readNbltypes() {
-        // Read number of block types (1-256)
         if (reader.readBit() == 0) return 1;
         if (reader.readBit() == 0) return 2;
-        int value = 3;
+        int count = 0;
         while (reader.readBit() == 1) {
-            value <<= 1;
+            count++;
         }
-        int extraBits = 0;
-        int tmp = value;
-        while (tmp > 2) { tmp >>= 1; extraBits++; }
-        if (extraBits > 0) {
-            value += reader.readBitsInt(extraBits);
-        }
-        return Math.min(value, 256);
+        return 3 + count;
     }
 
     private int[] readContextMap(int mapSize, int numTrees) {
@@ -650,7 +643,7 @@ public final class DecoderImpl {
             int hskip = reader.readBitsInt(2);
             return HuffmanDecoder.readComplexPrefixCode(reader, alphabetSize, hskip);
         } else {
-            throw new IllegalArgumentException("Reserved prefix code type 3");
+            return HuffmanDecoder.readFlatPrefixCode(reader, alphabetSize);
         }
     }
 }
