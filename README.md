@@ -7,7 +7,7 @@ A pure-Java Brotli compression library with encoder and decoder.
 - Pure Java, no native dependencies
 - Thread-safe with borrow/release pooling
 - Streaming API (InputStream/OutputStream)
-- Configurable quality levels (0-3)
+- Configurable quality levels (0–11)
 - BSD licensed
 
 ## Usage
