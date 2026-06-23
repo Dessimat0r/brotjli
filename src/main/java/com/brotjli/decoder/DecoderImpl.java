@@ -3,10 +3,6 @@ package com.brotjli.decoder;
 import com.brotjli.common.BrotliDictionary;
 import com.brotjli.common.Constants;
 import com.brotjli.common.WordTransform;
-import com.brotjli.decoder.BitReader;
-import com.brotjli.decoder.BlockDecoder;
-import com.brotjli.decoder.ContextDecoder;
-import com.brotjli.decoder.HuffmanDecoder;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -20,7 +16,6 @@ import java.util.Arrays;
  * via feed(), and it will produce output via the output buffer callback.
  */
 public final class DecoderImpl {
-    private static final int MAX_OUTPUT_CHUNK = 65536;
 
     // Decoder state
     private State state;
@@ -29,7 +24,6 @@ public final class DecoderImpl {
     // Meta-block state
     private int windowBits;
     private int windowSize;
-    private int metaBlockLength;
     private int metaBlockRemaining;
     private boolean isLast;
     private boolean isUncompressed;
@@ -78,7 +72,6 @@ public final class DecoderImpl {
     // Output buffer
     private byte[] outputBuffer;
     private int outputOffset;
-    private int outputLength;
     private static final int OUTPUT_BUFFER_SIZE = 65536;
 
     public enum State {
@@ -116,7 +109,6 @@ public final class DecoderImpl {
         this.recentDistances[3] = 4;
         this.metaBlockRemaining = 0;
         this.outputOffset = 0;
-        this.outputLength = 0;
         this.literalBlockDecoder.reset();
         this.insertCopyBlockDecoder.reset();
         this.distanceBlockDecoder.reset();
@@ -158,36 +150,45 @@ public final class DecoderImpl {
 
     private void readWindowBits() {
         try {
-            // Read WBITS using the Brotli prefix code.
-            // Read bits one at a time MSB-first and match against
-            // the known prefix code patterns.
-            int bits = 0;
-            int len = 0;
-            windowBits = 16;
-            while (true) {
-                int b = reader.readBit();
-                bits = (bits << 1) | b;
-                len++;
-                if (len == 1 && b == 0) { windowBits = 16; break; }
-                if (len == 2 && bits == 0b10) { windowBits = 17; break; }
-                if (len == 3) {
-                    if (bits == 0b010) { windowBits = 10; break; }
-                    if (bits == 0b011) { windowBits = 11; break; }
-                    if (bits == 0b100) { windowBits = 12; break; }
-                    if (bits == 0b101) { windowBits = 13; break; }
-                    if (bits == 0b110) { windowBits = 18; break; }
+            // Read WBITS using the standard Brotli prefix code decision tree (RFC 7932 Section 9.1).
+            int b0 = reader.readBit();
+            if (b0 == 0) {
+                windowBits = 16;
+            } else {
+                int b1 = reader.readBit();
+                if (b1 == 1) {
+                    int b2 = reader.readBit();
+                    int b3 = reader.readBit();
+                    if (b2 == 0) {
+                        windowBits = (b3 == 0) ? 18 : 22;
+                    } else {
+                        windowBits = (b3 == 0) ? 20 : 24;
+                    }
+                } else {
+                    int b2 = reader.readBit();
+                    int b3 = reader.readBit();
+                    if (b2 == 1) {
+                        windowBits = (b3 == 0) ? 19 : 23;
+                    } else if (b3 == 1) {
+                        windowBits = 21;
+                    } else {
+                        // Read 3 more bits: b4, b5, b6
+                        int b4 = reader.readBit();
+                        int b5 = reader.readBit();
+                        int b6 = reader.readBit();
+                        int val = (b6 << 2) | (b5 << 1) | b4;
+                        windowBits = switch (val) {
+                            case 0 -> 17;
+                            case 2 -> 10;
+                            case 3 -> 11;
+                            case 4 -> 12;
+                            case 5 -> 13;
+                            case 6 -> 14;
+                            case 7 -> 15;
+                            default -> throw new IllegalStateException("Invalid WBITS code: " + val);
+                        };
+                    }
                 }
-                if (len == 4) {
-                    if (bits == 0b1100) { windowBits = 14; break; }
-                    if (bits == 0b1101) { windowBits = 15; break; }
-                    if (bits == 0b1110) { windowBits = 19; break; }
-                }
-                if (len == 5 && bits == 0b11110) { windowBits = 20; break; }
-                if (len == 6 && bits == 0b111110) { windowBits = 21; break; }
-                if (len == 7 && bits == 0b1111110) { windowBits = 22; break; }
-                if (len == 8 && bits == 0b11111110) { windowBits = 23; break; }
-                if (len == 9 && bits == 0b111111110) { windowBits = 24; break; }
-                if (len >= 9) break;
             }
             windowSize = (1 << windowBits) - 16;
             ringBuffer = new byte[windowSize];
@@ -216,7 +217,7 @@ public final class DecoderImpl {
 
             if (nibblesBits == 3) {
                 // MNIBBLES = 0 -> empty/meta-data meta-block
-                int reserved = reader.readBit();
+                reader.readBit();
                 int mskipBytes = reader.readBitsInt(2);
                 if (mskipBytes > 0) {
                     long mskipLen = reader.readBits(mskipBytes * 8) + 1;
@@ -238,7 +239,6 @@ public final class DecoderImpl {
             else mnibbles = 6;
 
             int mlen = (int)reader.readBits(mnibbles * 4) + 1;
-            metaBlockLength = mlen;
             metaBlockRemaining = mlen;
 
             if (!isLast) {
@@ -389,7 +389,14 @@ public final class DecoderImpl {
                 }
                 distanceBlockDecoder.consume();
 
-                int distanceSymbol = distanceTrees[distanceType].decodeSymbol(reader);
+                int distContext = 3;
+                if (commandCopyLength == 2) distContext = 0;
+                else if (commandCopyLength == 3) distContext = 1;
+                else if (commandCopyLength == 4) distContext = 2;
+                int contextMapIndex = distanceType * 4 + distContext;
+                int treeIndex = contextMapDistance != null && contextMapIndex < contextMapDistance.length
+                    ? contextMapDistance[contextMapIndex] : 0;
+                int distanceSymbol = distanceTrees[Math.min(treeIndex, distanceTrees.length - 1)].decodeSymbol(reader);
                 commandDistanceCode = distanceSymbol;
             }
 
@@ -420,15 +427,15 @@ public final class DecoderImpl {
         int cpBlock = offset & 0x7;
         int insertBase, copyBase;
         switch (block) {
-            case 0: case 9:  insertBase = 0;  copyBase = 0;  break;
-            case 1:          insertBase = 0;  copyBase = 8;  break;
-            case 2:          insertBase = 0;  copyBase = 16; break;
-            case 3:          insertBase = 8;  copyBase = 0;  break;
-            case 4:          insertBase = 8;  copyBase = 8;  break;
-            case 5:          insertBase = 8;  copyBase = 16; break;
-            case 6:          insertBase = 16; copyBase = 0;  break;
-            case 7: case 10: insertBase = 16; copyBase = 8;  break;
-            case 8:          insertBase = 16; copyBase = 16; break;
+            case 0: case 2:          insertBase = 0;  copyBase = 0;  break;
+            case 1: case 3:          insertBase = 0;  copyBase = 8;  break;
+            case 4:                  insertBase = 8;  copyBase = 0;  break;
+            case 5:                  insertBase = 8;  copyBase = 8;  break;
+            case 6:                  insertBase = 0;  copyBase = 16; break;
+            case 7:                  insertBase = 16; copyBase = 0;  break;
+            case 8:                  insertBase = 8;  copyBase = 16; break;
+            case 9:                  insertBase = 16; copyBase = 8;  break;
+            case 10:                 insertBase = 16; copyBase = 16; break;
             default:         insertBase = 0;  copyBase = 0;  break;
         }
         int insertCode = Math.min(inBlock + insertBase, Constants.INSERT_LENGTH_BASE.length - 1);
@@ -460,19 +467,36 @@ public final class DecoderImpl {
     }
 
     private int resolveSpecialDistance(int code) {
-        int d0 = recentDistances[3];
-        int d1 = recentDistances[2];
-        int d2 = recentDistances[1];
-        int d3 = recentDistances[0];
-        int distance = switch (code) {
-            case 0 -> d0; case 1 -> d1; case 2 -> d2; case 3 -> d3;
-            case 4 -> d0 - 1; case 5 -> d0 + 1; case 6 -> d0 - 2; case 7 -> d0 + 2;
-            case 8 -> d0 - 3; case 9 -> d0 + 3; case 10 -> d1 - 1; case 11 -> d1 + 1;
-            case 12 -> d1 - 2; case 13 -> d1 + 2; case 14 -> d1 - 3; case 15 -> d1 + 3;
-            default -> d0;
-        };
-        if (distance <= 0) distance = 1;
-        if (code >= 4) {
+        int distance;
+        if (code == 0) {
+            distance = recentDistances[0];
+        } else if (code == 1) {
+            distance = recentDistances[1];
+            recentDistances[1] = recentDistances[0];
+            recentDistances[0] = distance;
+        } else if (code == 2) {
+            distance = recentDistances[2];
+            recentDistances[2] = recentDistances[1];
+            recentDistances[1] = recentDistances[0];
+            recentDistances[0] = distance;
+        } else if (code == 3) {
+            distance = recentDistances[3];
+            recentDistances[3] = recentDistances[2];
+            recentDistances[2] = recentDistances[1];
+            recentDistances[1] = recentDistances[0];
+            recentDistances[0] = distance;
+        } else if (code >= 4 && code <= 9) {
+            int offset = (code & 1) == 0 ? -(1 + ((code - 4) >> 1)) : (1 + ((code - 4) >> 1));
+            distance = recentDistances[0] + offset;
+            if (distance <= 0) distance = 1;
+            recentDistances[3] = recentDistances[2];
+            recentDistances[2] = recentDistances[1];
+            recentDistances[1] = recentDistances[0];
+            recentDistances[0] = distance;
+        } else { // 10..15
+            int offset = (code & 1) == 0 ? -(1 + ((code - 10) >> 1)) : (1 + ((code - 10) >> 1));
+            distance = recentDistances[1] + offset;
+            if (distance <= 0) distance = 1;
             recentDistances[3] = recentDistances[2];
             recentDistances[2] = recentDistances[1];
             recentDistances[1] = recentDistances[0];
@@ -636,14 +660,12 @@ public final class DecoderImpl {
     }
 
     private HuffmanDecoder readPrefixCode(int alphabetSize) {
-        int type = reader.readBitsInt(2);
-        if (type == 1 || type == 2) {
+        // Read HSKIP (first 2 bits of prefix code, RFC 7932 Section 3.4/3.5).
+        int hskip = reader.readBitsInt(2);
+        if (hskip == 1) {
             return HuffmanDecoder.readSimplePrefixCode(reader, alphabetSize);
-        } else if (type == 0) {
-            int hskip = reader.readBitsInt(2);
-            return HuffmanDecoder.readComplexPrefixCode(reader, alphabetSize, hskip);
         } else {
-            return HuffmanDecoder.readFlatPrefixCode(reader, alphabetSize);
+            return HuffmanDecoder.readComplexPrefixCode(reader, alphabetSize, hskip);
         }
     }
 }

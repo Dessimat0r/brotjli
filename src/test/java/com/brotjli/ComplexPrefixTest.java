@@ -7,7 +7,6 @@ import com.brotjli.decoder.HuffmanDecoder;
 import com.brotjli.encoder.BitWriter;
 import com.brotjli.encoder.HuffmanTreeBuilder;
 import java.util.Arrays;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -29,12 +28,12 @@ public class ComplexPrefixTest {
         // Each entry: {clSymbolValue, rawBits, nBits}
         // Maps from writeFixedCodeLengthValue input → writeBits args
         int[][] cases = {
-            {0, 0, 2},   // value 0: writeBits(0, 2)
-            {4, 1, 2},   // value 4: writeBits(1, 2)
-            {3, 2, 2},   // value 3: writeBits(2, 2)
-            {2, 3, 3},   // value 2: writeBits(3, 3)
-            {1, 7, 4},   // value 1: writeBits(7, 4)
-            {5, 15, 4},  // value 5: writeBits(15, 4)
+            {0, 0, 2},   // value 0: writeBits(0, 2) -> LSB: 0, 0
+            {1, 7, 4},   // value 1: writeBits(7, 4) -> LSB: 1, 1, 1, 0
+            {2, 3, 3},   // value 2: writeBits(3, 3) -> LSB: 1, 1, 0
+            {3, 2, 2},   // value 3: writeBits(2, 2) -> LSB: 0, 1
+            {4, 1, 2},   // value 4: writeBits(1, 2) -> LSB: 1, 0
+            {5, 15, 4},  // value 5: writeBits(15, 4) -> LSB: 1, 1, 1, 1
         };
 
         for (int[] c : cases) {
@@ -208,8 +207,10 @@ public class ComplexPrefixTest {
         byte[] data = "abcde".getBytes();
         System.out.println("=== Diagnostic bitstream walk for 'abcde' q=1 ===");
 
-        BrotjliEncoder enc = new BrotjliEncoder();
-        byte[] compressed = enc.encode(data, 1);
+        byte[] compressed;
+        try (BrotjliEncoder enc = new BrotjliEncoder()) {
+            compressed = enc.encode(data, 1);
+        }
         System.out.println("Compressed: " + compressed.length + " bytes");
         dumpBits("Hex", compressed);
 
@@ -292,32 +293,30 @@ public class ComplexPrefixTest {
     // ── Round-trip helper with diagnostics ────────────────────────────────
 
     private void testRoundTrip(byte[] data, int quality, String label) {
-        BrotjliEncoder enc = new BrotjliEncoder();
-        BrotjliDecoder dec = new BrotjliDecoder();
         byte[] compressed;
         byte[] decompressed;
-
-        try {
-            compressed = enc.encode(data, quality);
-        } catch (Exception e) {
-            System.err.println(label + ": encoder threw: " + e.getMessage());
-            fail(label + ": encoder threw: " + e.getMessage());
-            return;
-        }
-
-        try {
-            decompressed = dec.decode(compressed);
-        } catch (Exception e) {
-            System.err.println(label + ": decoder threw: " + e.getMessage());
-            dumpBits("Compressed", compressed);
-            fail(label + ": decoder threw: " + e.getMessage());
-            return;
+        try (BrotjliEncoder enc = new BrotjliEncoder();
+             BrotjliDecoder dec = new BrotjliDecoder()) {
+            try {
+                compressed = enc.encode(data, quality);
+            } catch (Exception e) {
+                System.err.println(label + ": encoder threw: " + e.getMessage());
+                fail(label + ": encoder threw: " + e.getMessage());
+                return;
+            }
+            try {
+                decompressed = dec.decode(compressed);
+            } catch (Exception e) {
+                System.err.println(label + ": decoder threw: " + e.getMessage());
+                dumpBits("Compressed", compressed);
+                fail(label + ": decoder threw: " + e.getMessage());
+                return;
+            }
         }
 
         if (decompressed.length != data.length) {
             System.err.println(label + ": length mismatch: expected " + data.length
                 + " got " + decompressed.length);
-            dumpBits("Compressed", compressed);
             fail(label + ": length mismatch: expected " + data.length
                 + " got " + decompressed.length);
             return;
@@ -337,16 +336,20 @@ public class ComplexPrefixTest {
 
     // ── Bit-level helpers ─────────────────────────────────────────────────
 
-    private static final int[] CL_SYMBOL_TABLE = {
-        2, 34, 26, 19, 2, 34, 26, 12, 2, 34, 26, 19, 2, 34, 26, 44,
-        2, 34, 26, 19, 2, 34, 26, 12, 2, 34, 26, 19, 2, 34, 26, 44
+    // Brotli fixed prefix code lookup table for CL code length symbols (RFC 7932 Section 3.5).
+    private static final int[] kCodeLengthPrefixLength = {
+        2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4
+    };
+    private static final int[] kCodeLengthPrefixValue = {
+        0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5
     };
 
     private static int readCodeLengthSymbol(BitReader r) {
-        int peek = (int) r.peekBits(5);
-        int entry = CL_SYMBOL_TABLE[peek];
-        r.skipBits(entry & 0x7);
-        return entry >>> 3;
+        int peek = r.peekBitsInt(4);
+        int len = kCodeLengthPrefixLength[peek];
+        int val = kCodeLengthPrefixValue[peek];
+        r.skipBits(len);
+        return val;
     }
 
     private static int readNbltypes(BitReader r) {
@@ -360,29 +363,43 @@ public class ComplexPrefixTest {
     }
 
     private static int readWindowBits(BitReader r) {
-        int bits = 0, len = 0;
-        while (true) {
-            int b = r.readBit();
-            bits = (bits << 1) | b;
-            len++;
-            if (len == 1 && b == 0) return 16;
-            if (len == 2 && bits == 0b10) return 17;
-            if (len == 3) {
-                if (bits == 0b010) return 10;
-                if (bits == 0b011) return 11;
-                if (bits == 0b100) return 12;
-                if (bits == 0b101) return 13;
-                if (bits == 0b110) return 18;
+        int b0 = r.readBit();
+        if (b0 == 0) {
+            return 16;
+        } else {
+            int b1 = r.readBit();
+            if (b1 == 1) {
+                int b2 = r.readBit();
+                int b3 = r.readBit();
+                if (b2 == 0) {
+                    return (b3 == 0) ? 18 : 22;
+                } else {
+                    return (b3 == 0) ? 20 : 24;
+                }
+            } else {
+                int b2 = r.readBit();
+                int b3 = r.readBit();
+                if (b2 == 1) {
+                    return (b3 == 0) ? 19 : 23;
+                } else if (b3 == 1) {
+                    return 21;
+                } else {
+                    int b4 = r.readBit();
+                    int b5 = r.readBit();
+                    int b6 = r.readBit();
+                    int val = (b6 << 2) | (b5 << 1) | b4;
+                    return switch (val) {
+                        case 0 -> 17;
+                        case 2 -> 10;
+                        case 3 -> 11;
+                        case 4 -> 12;
+                        case 5 -> 13;
+                        case 6 -> 14;
+                        case 7 -> 15;
+                        default -> throw new IllegalStateException("Invalid WBITS code: " + val);
+                    };
+                }
             }
-            if (len == 4 && bits == 0b1100) return 14;
-            if (len == 4 && bits == 0b1101) return 15;
-            if (len == 4 && bits == 0b1110) return 19;
-            if (len == 5 && bits == 0b11110) return 20;
-            if (len == 6 && bits == 0b111110) return 21;
-            if (len == 7 && bits == 0b1111110) return 22;
-            if (len == 8 && bits == 0b11111110) return 23;
-            if (len == 9 && bits == 0b111111110) return 24;
-            if (len >= 9) return 16;
         }
     }
 
@@ -442,45 +459,81 @@ public class ComplexPrefixTest {
         }
         if (lastNonZero < 0) { return; }
 
-        // Build CL code lengths (matching encoder's fixed approach)
+        // Build CL code lengths
         int[] clCodeLengths = new int[18];
-        int[] clFreq = new int[19];
+        int[] clFreq = new int[18];
         for (int i = 0; i <= lastNonZero; i++) {
             int len = lengths[i];
-            if (len < clFreq.length) clFreq[len]++;
+            if (len >= 0 && len < clFreq.length) clFreq[len]++;
         }
         buildClCodeLengths(clFreq, clCodeLengths);
 
+        int clSpace = 32;
         for (int i = 0; i < 18; i++) {
             int orderSym = Constants.CODE_LENGTH_ORDER[i];
-            writeFixedCodeLengthValue(w, clCodeLengths[orderSym]);
+            int cl = clCodeLengths[orderSym];
+            writeFixedCodeLengthValue(w, cl);
+            if (cl > 0) {
+                clSpace -= (32 >> cl);
+                if (clSpace <= 0) {
+                    break;
+                }
+            }
         }
 
         HuffmanTreeBuilderForTest clTree = new HuffmanTreeBuilderForTest();
         clTree.buildFromLengths(clCodeLengths, 18);
 
-        // Write encoded symbol count (must match what decoder expects)
-        int symCount = lastNonZero + 1;
-        w.writeBits(symCount, 16);
+        int i = 0;
+        int prevLen = 8;
+        boolean canUse16 = false;
 
-        int[] symbols = convertLengthsToSymbols(lengths, lastNonZero);
-        for (int idx = 0; idx < symbols.length; idx++) {
-            int sym = symbols[idx];
-            int code = clTree.getCode(sym);
-            int codeLen = clTree.getCodeLength(sym);
-            if (codeLen > 0) {
-                w.writeBitsReversed(code, codeLen);
-            }
-            if (sym == 16) {
-                idx++;
-                if (idx < symbols.length) {
-                    w.writeBits(symbols[idx], 2);
+        while (i <= lastNonZero) {
+            int len = lengths[i];
+
+            if (len == 0) {
+                int zeroCount = 0;
+                while (i + zeroCount <= lastNonZero && zeroCount < 138 && lengths[i + zeroCount] == 0) {
+                    zeroCount++;
                 }
-            } else if (sym == 17) {
-                idx++;
-                if (idx < symbols.length) {
-                    w.writeBits(symbols[idx], 3);
+                int remaining = zeroCount;
+                if (remaining >= 3) {
+                    int chunk = Math.min(remaining - 3, 7);
+                    w.writeBitsReversed(clTree.getCode(17), clTree.getCodeLength(17));
+                    w.writeBits(chunk, 3);
+                    remaining -= (3 + chunk);
                 }
+                while (remaining > 0) {
+                    w.writeBitsReversed(clTree.getCode(0), clTree.getCodeLength(0));
+                    remaining--;
+                }
+                i += zeroCount;
+                canUse16 = false;
+            } else if (len == prevLen && canUse16) {
+                int repeat = 1;
+                while (i + repeat <= lastNonZero && repeat < 6 && lengths[i + repeat] == prevLen) {
+                    repeat++;
+                }
+                if (repeat >= 3) {
+                    w.writeBitsReversed(clTree.getCode(16), clTree.getCodeLength(16));
+                    w.writeBits(repeat - 3, 2);
+                    i += repeat;
+                    canUse16 = false;
+                } else {
+                    if (len <= 15 && clTree.getCodeLength(len) > 0) {
+                        w.writeBitsReversed(clTree.getCode(len), clTree.getCodeLength(len));
+                    }
+                    prevLen = len;
+                    canUse16 = true;
+                    i++;
+                }
+            } else {
+                if (len <= 15 && clTree.getCodeLength(len) > 0) {
+                    w.writeBitsReversed(clTree.getCode(len), clTree.getCodeLength(len));
+                }
+                prevLen = len;
+                canUse16 = true;
+                i++;
             }
         }
     }
@@ -594,15 +647,13 @@ public class ComplexPrefixTest {
     }
 
     private static void writeFixedCodeLengthValue(BitWriter w, int value) {
-        // Brotli RFC 7932 fixed prefix code for CL symbols.
-        // MSB codes mapped to LSB bits.
         switch (value) {
-            case 0: w.writeBits(0, 2); break;   // "00" MSB → "00" LSB
-            case 4: w.writeBits(2, 2); break;   // "01" MSB → "10" LSB
-            case 3: w.writeBits(1, 2); break;   // "10" MSB → "01" LSB
-            case 2: w.writeBits(6, 4); break;   // "0110" MSB → "0110" LSB
-            case 1: w.writeBits(14, 4); break;  // "0111" MSB → "1110" LSB
-            case 5: w.writeBits(15, 4); break;  // "1111" MSB → "1111" LSB
+            case 0: w.writeBits(0, 2); break;
+            case 1: w.writeBits(7, 4); break;
+            case 2: w.writeBits(3, 3); break;
+            case 3: w.writeBits(2, 2); break;
+            case 4: w.writeBits(1, 2); break;
+            case 5: w.writeBits(15, 4); break;
             default: w.writeBits(0, 2); break;
         }
     }
@@ -700,18 +751,16 @@ public class ComplexPrefixTest {
 
     private static void walkComplexPrefixCode(BitReader reader, int alphabetSize, int hskip) {
         int[] clCodeLengths = new int[Constants.CODE_LENGTH_CODES];
-        int numCodes = 0;
-        int spaceOfCl = 32;
         int startIdx = hskip;
         System.out.print("  CL code lengths: ");
+        int clSpace = 32;
         for (int i = startIdx; i < 18; i++) {
             int codeLen = readCodeLengthSymbol(reader);
             clCodeLengths[Constants.CODE_LENGTH_ORDER[i]] = codeLen;
             System.out.print(codeLen + " ");
-            if (codeLen != 0) {
-                spaceOfCl -= 32 >> codeLen;
-                numCodes++;
-                if (spaceOfCl <= 0) {
+            if (codeLen > 0) {
+                clSpace -= (32 >> codeLen);
+                if (clSpace <= 0) {
                     break;
                 }
             }
@@ -737,46 +786,44 @@ public class ComplexPrefixTest {
         int[] resultLengths = new int[alphabetSize];
         int idx = 0;
         int prevValue = 8;
-        int space = 32768;
         int repeat = 0;
-        int repeat_code_len = 0;
+        int repeatCodeLen = 0;
+        int space = 32768;
 
         while (idx < alphabetSize && space > 0) {
             int sym = clDecoder.decodeSymbol(reader);
+
             if (sym < 16) {
                 repeat = 0;
+                resultLengths[idx++] = sym;
                 if (sym > 0) {
-                    resultLengths[idx] = sym;
                     prevValue = sym;
                     space -= 32768 >> sym;
-                } else {
-                    resultLengths[idx] = 0;
                 }
-                idx++;
-            } else {
-                int extra_bits = (sym == 16) ? 2 : 3;
-                int repeat_delta = reader.readBitsInt(extra_bits);
-                int new_len = (sym == 16) ? prevValue : 0;
-                if (repeat_code_len != new_len) {
+            } else { // sym == 16 or 17
+                int extraBits = (sym == 16) ? 2 : 3;
+                int repeatDelta = reader.readBitsInt(extraBits);
+                int newLen = (sym == 16) ? prevValue : 0;
+                if (repeatCodeLen != newLen) {
                     repeat = 0;
-                    repeat_code_len = new_len;
+                    repeatCodeLen = newLen;
                 }
-                int old_repeat = repeat;
+                int oldRepeat = repeat;
                 if (repeat > 0) {
                     repeat -= 2;
-                    repeat <<= extra_bits;
+                    repeat <<= extraBits;
                 }
-                repeat += repeat_delta + 3;
-                int actual_repeat_delta = repeat - old_repeat;
-
-                if (repeat_code_len != 0) {
-                    for (int j = 0; j < actual_repeat_delta; j++) {
-                        resultLengths[idx++] = repeat_code_len;
-                    }
-                    space -= actual_repeat_delta << (15 - repeat_code_len);
-                } else {
-                    for (int j = 0; j < actual_repeat_delta; j++) {
-                        resultLengths[idx++] = 0;
+                repeat += repeatDelta + 3;
+                int numToWrite = repeat - oldRepeat;
+                
+                if (idx + numToWrite > alphabetSize) {
+                    throw new IllegalStateException("Repeat code length extends past alphabet size");
+                }
+                
+                for (int j = 0; j < numToWrite; j++) {
+                    resultLengths[idx++] = repeatCodeLen;
+                    if (repeatCodeLen > 0) {
+                        space -= 32768 >> repeatCodeLen;
                     }
                 }
             }

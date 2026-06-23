@@ -11,7 +11,6 @@ import com.brotjli.common.Constants;
  */
 public final class ContextDecoder {
     private int contextMode;
-    private int literalBlockType;
 
     public ContextDecoder() {
         this.contextMode = Constants.CONTEXT_LSB6;
@@ -22,7 +21,6 @@ public final class ContextDecoder {
      */
     public void setContextMode(int blockType, int mode) {
         this.contextMode = mode;
-        this.literalBlockType = blockType;
     }
 
     /**

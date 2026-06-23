@@ -175,39 +175,39 @@ public class RoundTripTest {
 
     @Test
     void encoderDecoderReuse() {
-        BrotjliEncoder encoder = new BrotjliEncoder();
-        BrotjliDecoder decoder = new BrotjliDecoder();
-
-        byte[] data1 = "Hello, Brotjli!".getBytes();
-        byte[] compressed1 = encoder.encode(data1, QUALITY);
-        byte[] decompressed1 = decoder.decode(compressed1);
-        assertArrayEquals(data1, decompressed1, "First encode/decode round-trip failed");
-
-        encoder.reset();
-        decoder.reset();
-
-        byte[] data2 = "Another message for testing reuse.".getBytes();
-        byte[] compressed2 = encoder.encode(data2, QUALITY);
-        byte[] decompressed2 = decoder.decode(compressed2);
-        assertArrayEquals(data2, decompressed2, "Second encode/decode round-trip failed");
+        try (BrotjliEncoder encoder = new BrotjliEncoder();
+             BrotjliDecoder decoder = new BrotjliDecoder()) {
+            byte[] data1 = "Hello, Brotjli!".getBytes();
+            byte[] compressed1 = encoder.encode(data1, QUALITY);
+            byte[] decompressed1 = decoder.decode(compressed1);
+            assertArrayEquals(data1, decompressed1, "First encode/decode round-trip failed");
+ 
+            encoder.reset();
+            decoder.reset();
+ 
+            byte[] data2 = "Another message for testing reuse.".getBytes();
+            byte[] compressed2 = encoder.encode(data2, QUALITY);
+            byte[] decompressed2 = decoder.decode(compressed2);
+            assertArrayEquals(data2, decompressed2, "Second encode/decode round-trip failed");
+        }
     }
 
     @Test
     void encoderDecoderReuseHigherQualities() {
-        BrotjliEncoder encoder = new BrotjliEncoder();
-        BrotjliDecoder decoder = new BrotjliDecoder();
-
-        String complexText = "Complex prefix test with many distinct symbols: "
-            + "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789!@#$%^&*()";
-        byte[] data = complexText.getBytes();
-
-        for (int q = 0; q <= 3; q++) {
-            byte[] compressed = encoder.encode(data, q);
-            byte[] decompressed = decoder.decode(compressed);
-            assertArrayEquals(data, decompressed,
-                "Reuse round-trip failed for quality " + q);
-            encoder.reset();
-            decoder.reset();
+        try (BrotjliEncoder encoder = new BrotjliEncoder();
+             BrotjliDecoder decoder = new BrotjliDecoder()) {
+            String complexText = "Complex prefix test with many distinct symbols: "
+                + "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789!@#$%^&*()";
+            byte[] data = complexText.getBytes();
+ 
+            for (int q = 0; q <= 3; q++) {
+                byte[] compressed = encoder.encode(data, q);
+                byte[] decompressed = decoder.decode(compressed);
+                assertArrayEquals(data, decompressed,
+                    "Reuse round-trip failed for quality " + q);
+                encoder.reset();
+                decoder.reset();
+            }
         }
     }
 }

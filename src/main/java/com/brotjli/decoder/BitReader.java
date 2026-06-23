@@ -1,7 +1,5 @@
 package com.brotjli.decoder;
 
-import java.io.InputStream;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.function.IntSupplier;
 
@@ -20,7 +18,6 @@ public final class BitReader {
     private int bitsInAccumulator;
 
     private static final int ACCUMULATOR_CAPACITY = 64;
-    private static final int REFILL_THRESHOLD = 32;
 
     public BitReader() {
         this.buffer = new byte[0];

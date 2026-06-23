@@ -25,11 +25,9 @@ public final class DecoderPool implements AutoCloseable {
     private final BlockingQueue<BrotjliDecoder> available;
     private final Semaphore permits;
     private final AtomicInteger created;
-    private final int maxSize;
     private volatile boolean closed;
 
     public DecoderPool(int maxSize) {
-        this.maxSize = maxSize;
         this.available = new LinkedBlockingQueue<>();
         this.permits = new Semaphore(maxSize);
         this.created = new AtomicInteger(0);

@@ -326,22 +326,24 @@ public class StreamTest {
     void encoderEncodeInputStream() throws Exception {
         byte[] data = new byte[10_000];
         new Random(42).nextBytes(data);
-        BrotjliEncoder encoder = new BrotjliEncoder();
-        byte[] compressed = encoder.encode(new ByteArrayInputStream(data), 0);
-        byte[] decompressed = Brotjli.decompress(compressed);
-        assertArrayEquals(data, decompressed);
+        try (BrotjliEncoder encoder = new BrotjliEncoder()) {
+            byte[] compressed = encoder.encode(new ByteArrayInputStream(data), 0);
+            byte[] decompressed = Brotjli.decompress(compressed);
+            assertArrayEquals(data, decompressed);
+        }
     }
 
     @Test
     void encoderEncodeInputStreamToOutputStream() throws Exception {
         byte[] data = new byte[5_000];
         new Random(99).nextBytes(data);
-        BrotjliEncoder encoder = new BrotjliEncoder();
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        encoder.encode(new ByteArrayInputStream(data), baos, 0);
-        byte[] compressed = baos.toByteArray();
-        byte[] decompressed = Brotjli.decompress(compressed);
-        assertArrayEquals(data, decompressed);
+        try (BrotjliEncoder encoder = new BrotjliEncoder()) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            encoder.encode(new ByteArrayInputStream(data), baos, 0);
+            byte[] compressed = baos.toByteArray();
+            byte[] decompressed = Brotjli.decompress(compressed);
+            assertArrayEquals(data, decompressed);
+        }
     }
 
     @Test
@@ -349,10 +351,11 @@ public class StreamTest {
         byte[] data = new byte[1000];
         new Random(42).nextBytes(data);
         ByteBuffer bb = ByteBuffer.wrap(data);
-        BrotjliEncoder encoder = new BrotjliEncoder();
-        byte[] compressed = encoder.encode(bb, 0);
-        byte[] decompressed = Brotjli.decompress(compressed);
-        assertArrayEquals(data, decompressed);
+        try (BrotjliEncoder encoder = new BrotjliEncoder()) {
+            byte[] compressed = encoder.encode(bb, 0);
+            byte[] decompressed = Brotjli.decompress(compressed);
+            assertArrayEquals(data, decompressed);
+        }
     }
 
     @Test
@@ -360,9 +363,10 @@ public class StreamTest {
         byte[] data = new byte[10_000];
         new Random(42).nextBytes(data);
         byte[] compressed = Brotjli.compress(data, 0);
-        BrotjliDecoder decoder = new BrotjliDecoder();
-        byte[] decompressed = decoder.decode(new ByteArrayInputStream(compressed));
-        assertArrayEquals(data, decompressed);
+        try (BrotjliDecoder decoder = new BrotjliDecoder()) {
+            byte[] decompressed = decoder.decode(new ByteArrayInputStream(compressed));
+            assertArrayEquals(data, decompressed);
+        }
     }
 
     @Test
@@ -370,10 +374,11 @@ public class StreamTest {
         byte[] data = new byte[5_000];
         new Random(99).nextBytes(data);
         byte[] compressed = Brotjli.compress(data, 0);
-        BrotjliDecoder decoder = new BrotjliDecoder();
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        decoder.decode(new ByteArrayInputStream(compressed), baos);
-        assertArrayEquals(data, baos.toByteArray());
+        try (BrotjliDecoder decoder = new BrotjliDecoder()) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            decoder.decode(new ByteArrayInputStream(compressed), baos);
+            assertArrayEquals(data, baos.toByteArray());
+        }
     }
 
     @Test
@@ -381,9 +386,10 @@ public class StreamTest {
         byte[] data = new byte[1000];
         new Random(42).nextBytes(data);
         byte[] compressed = Brotjli.compress(data, 0);
-        BrotjliDecoder decoder = new BrotjliDecoder();
-        byte[] decompressed = decoder.decode(ByteBuffer.wrap(compressed));
-        assertArrayEquals(data, decompressed);
+        try (BrotjliDecoder decoder = new BrotjliDecoder()) {
+            byte[] decompressed = decoder.decode(ByteBuffer.wrap(compressed));
+            assertArrayEquals(data, decompressed);
+        }
     }
 
     // ==================== Pool convenience methods ====================

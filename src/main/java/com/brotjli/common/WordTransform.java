@@ -1,7 +1,5 @@
 package com.brotjli.common;
 
-import java.util.Arrays;
-
 /**
  * Brotli dictionary word transforms. Each transform takes a dictionary word
  * and applies: prefix + word[omitFirst .. wordLength - omitLast] + suffix.

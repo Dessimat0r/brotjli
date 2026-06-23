@@ -1,6 +1,5 @@
 package com.brotjli;
 
-import com.brotjli.encoder.BitWriter;
 import com.brotjli.encoder.EncoderImpl;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

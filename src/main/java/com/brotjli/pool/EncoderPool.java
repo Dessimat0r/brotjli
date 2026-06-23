@@ -48,7 +48,6 @@ public final class EncoderPool implements AutoCloseable {
     private final BlockingQueue<BrotjliEncoder> available;
     private final Semaphore permits;
     private final AtomicInteger created;
-    private final int maxSize;
     private final int defaultQuality;
     private volatile boolean closed;
 
@@ -59,7 +58,6 @@ public final class EncoderPool implements AutoCloseable {
      * @param defaultQuality default compression quality (0&ndash;11)
      */
     public EncoderPool(int maxSize, int defaultQuality) {
-        this.maxSize = maxSize;
         this.defaultQuality = Math.max(0, Math.min(11, defaultQuality));
         this.available = new LinkedBlockingQueue<>();
         this.permits = new Semaphore(maxSize);

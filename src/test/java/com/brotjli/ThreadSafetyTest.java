@@ -41,17 +41,20 @@ public class ThreadSafetyTest {
             for (int i = 0; i < numTasks; i++) {
                 final int taskId = i;
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] data = ("Task " + taskId + " data for concurrent testing").getBytes();
                         byte[] compressed = enc.encode(data, 0);
                         byte[] decompressed = Brotjli.decompress(compressed);
                         assertArrayEquals(data, decompressed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Thread " + taskId + " failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });
@@ -69,24 +72,28 @@ public class ThreadSafetyTest {
         DecoderPool pool = new DecoderPool(numThreads);
         AtomicInteger successCount = new AtomicInteger(0);
 
-        BrotjliEncoder encoder = new BrotjliEncoder();
         byte[] testData = "Concurrent decoder pool test data".getBytes();
-        byte[] compressed = encoder.encode(testData, 0);
-        encoder.reset();
+        byte[] compressed;
+        try (BrotjliEncoder encoder = new BrotjliEncoder()) {
+            compressed = encoder.encode(testData, 0);
+        }
 
         try (pool) {
             CountDownLatch latch = new CountDownLatch(numTasks);
             for (int i = 0; i < numTasks; i++) {
                 Thread.ofVirtual().start(() -> {
+                    BrotjliDecoder dec = null;
                     try {
-                        BrotjliDecoder dec = pool.borrow();
+                        dec = pool.borrow();
                         byte[] result = dec.decode(compressed);
                         assertArrayEquals(testData, result);
-                        pool.release(dec);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Decoder thread failed: " + e.getMessage());
                     } finally {
+                        if (dec != null) {
+                            pool.release(dec);
+                        }
                         latch.countDown();
                     }
                 });
@@ -134,16 +141,19 @@ public class ThreadSafetyTest {
             for (int i = 0; i < numTasks; i++) {
                 final int taskId = i;
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] compressed = enc.encode(testData[taskId], 1);
                         byte[] decompressed = Brotjli.decompress(compressed);
                         assertArrayEquals(testData[taskId], decompressed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Thread " + taskId + " failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });
@@ -173,17 +183,22 @@ public class ThreadSafetyTest {
             for (int i = 0; i < numTasks; i++) {
                 final int taskId = i;
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] compressed = enc.encode(originalData[taskId], 2);
-                        BrotjliDecoder dec = new BrotjliDecoder();
-                        byte[] decompressed = dec.decode(compressed);
+                        byte[] decompressed;
+                        try (BrotjliDecoder dec = new BrotjliDecoder()) {
+                            decompressed = dec.decode(compressed);
+                        }
                         assertArrayEquals(originalData[taskId], decompressed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Task " + taskId + " failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });
@@ -207,16 +222,19 @@ public class ThreadSafetyTest {
             long start = System.nanoTime();
             for (int i = 0; i < numTasks; i++) {
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] compressed = enc.encode(data, 1);
                         byte[] decompressed = Brotjli.decompress(compressed);
                         assertArrayEquals(data, decompressed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Stress task failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });
@@ -241,19 +259,22 @@ public class ThreadSafetyTest {
             for (int i = 0; i < numTasks; i++) {
                 final int seed = i * 137;
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
                         byte[] data = new byte[1000];
                         new Random(seed).nextBytes(data);
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] compressed = enc.encode(data, 1);
                         byte[] decompressed = Brotjli.decompress(compressed);
                         assertArrayEquals(data, decompressed,
                             "Data corruption detected for seed " + seed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Task failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });

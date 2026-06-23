@@ -1,7 +1,6 @@
 package com.brotjli.encoder;
 
 import com.brotjli.common.Constants;
-import java.util.Arrays;
 
 /**
  * Core Brotli encoder state machine.
@@ -67,9 +66,6 @@ public final class EncoderImpl {
         // Write window bits header
         writeWindowBits();
 
-        int pos = offset;
-        int end = offset + length;
-
         // For quality 0, just store uncompressed
         if (quality == Constants.QUALITY_STORE) {
             if (length == 0) {
@@ -91,7 +87,7 @@ public final class EncoderImpl {
             metaBlockBuilder.init(quality);
 
             // Find matches and build meta-block
-            pos = findMatchesAndBuildCommands(input, offset, length);
+            findMatchesAndBuildCommands(input, offset, length);
 
             // Write any remaining literals
             if (metaBlockBuilder != null) {
@@ -105,28 +101,26 @@ public final class EncoderImpl {
     }
 
     private void writeWindowBits() {
-        // Encode window bits (WBITS) using the Brotli prefix code.
-        // These patterns are the MSB-first code values as they appear
-        // in the stream. Since BitWriter writes LSB-first, we reverse them.
-        // For single-bit patterns we write individual bits.
-        // The decoder reads bits MSB-first to reconstruct the pattern.
+        // Encode window bits (WBITS) using the Brotli prefix code (RFC 7932 Section 9.1).
+        // Since BitWriter writes LSB-first, we map the printed Bit Pattern in the RFC
+        // (which is parsed right-to-left) to its direct binary integer value.
         switch (windowBits) {
-            case 16 -> writer.writeBit(0); // "0"
-            case 17 -> writer.writeBitsReversed(0b10, 2); // "10"
-            case 18 -> writer.writeBitsReversed(0b110, 3); // "110"
-            case 19 -> writer.writeBitsReversed(0b1110, 4); // "1110"
-            case 20 -> writer.writeBitsReversed(0b11110, 5); // "11110"
-            case 21 -> writer.writeBitsReversed(0b111110, 6); // "111110"
-            case 22 -> writer.writeBitsReversed(0b1111110, 7); // "1111110"
-            case 23 -> writer.writeBitsReversed(0b11111110, 8); // "11111110"
-            case 24 -> writer.writeBitsReversed(0b111111110, 9); // "111111110"
-            case 10 -> writer.writeBitsReversed(0b010, 3); // "010"
-            case 11 -> writer.writeBitsReversed(0b011, 3); // "011"
-            case 12 -> writer.writeBitsReversed(0b100, 3); // "100"
-            case 13 -> writer.writeBitsReversed(0b101, 3); // "101"
-            case 14 -> writer.writeBitsReversed(0b1100, 4); // "1100"
-            case 15 -> writer.writeBitsReversed(0b1101, 4); // "1101"
-            default -> writer.writeBit(0); // 16
+            case 10 -> writer.writeBits(33, 7);      // "0100001" -> LSB: 1, 0, 0, 0, 0, 1, 0
+            case 11 -> writer.writeBits(49, 7);      // "0110001" -> LSB: 1, 0, 0, 0, 1, 1, 0
+            case 12 -> writer.writeBits(65, 7);      // "1000001" -> LSB: 1, 0, 0, 0, 0, 0, 1
+            case 13 -> writer.writeBits(81, 7);      // "1010001" -> LSB: 1, 0, 0, 0, 1, 0, 1
+            case 14 -> writer.writeBits(97, 7);      // "1100001" -> LSB: 1, 0, 0, 0, 0, 1, 1
+            case 15 -> writer.writeBits(113, 7);     // "1110001" -> LSB: 1, 0, 0, 0, 1, 1, 1
+            case 16 -> writer.writeBit(0);           // "0"       -> LSB: 0
+            case 17 -> writer.writeBits(1, 7);       // "0000001" -> LSB: 1, 0, 0, 0, 0, 0, 0
+            case 18 -> writer.writeBits(3, 4);       // "0011"    -> LSB: 1, 1, 0, 0
+            case 19 -> writer.writeBits(5, 4);       // "0101"    -> LSB: 1, 0, 1, 0
+            case 20 -> writer.writeBits(7, 4);       // "0111"    -> LSB: 1, 1, 1, 0
+            case 21 -> writer.writeBits(9, 4);       // "1001"    -> LSB: 1, 0, 0, 1
+            case 22 -> writer.writeBits(11, 4);      // "1011"    -> LSB: 1, 1, 0, 1
+            case 23 -> writer.writeBits(13, 4);      // "1101"    -> LSB: 1, 0, 1, 1
+            case 24 -> writer.writeBits(15, 4);      // "1111"    -> LSB: 1, 1, 1, 1
+            default -> writer.writeBit(0);           // 16
         }
     }
 

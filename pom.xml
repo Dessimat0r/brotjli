@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.brotjli</groupId>
     <artifactId>brotjli</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
     <name>Brotjli</name>
     <description>Pure-Java Brotli compression library with encoder and decoder</description>
@@ -41,6 +41,19 @@
                 <configuration>
                     <forkedProcessTimeoutInSeconds>15</forkedProcessTimeoutInSeconds>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

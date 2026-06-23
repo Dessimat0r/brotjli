@@ -29,51 +29,164 @@ public final class MetaBlockBuilder {
     private final int[] distTemp = new int[3];
     private HuffmanTreeBuilder mapTreeReusable;
     private HuffmanTreeBuilder clTreeReusable;
+    private final int[] recentDistances = new int[]{16, 15, 11, 4};
 
-    public record Command(int insertLength, int copyLength, int distance, byte[] insertLiterals) {
-        public int insertCode() {
-            for (int i = Constants.INSERT_LENGTH_BASE.length - 1; i >= 0; i--) {
-                if (insertLength >= Constants.INSERT_LENGTH_BASE[i]) return i;
-            }
-            return 0;
-        }
-
-        public int copyCode() {
-            for (int i = Constants.COPY_LENGTH_BASE.length - 1; i >= 0; i--) {
-                if (copyLength >= Constants.COPY_LENGTH_BASE[i]) return i;
-            }
-            return 0;
-        }
-
+    public record Command(
+        int insertLength,
+        int copyLength,
+        int distance,
+        byte[] insertLiterals,
+        int insertCode,
+        int copyCode,
+        int icSymbol,
+        int distCode,
+        int distExtra,
+        int distExtraBits
+    ) {
         public int insertExtra() {
-            return Constants.INSERT_LENGTH_EXTRA_BITS[insertCode()];
+            return Constants.INSERT_LENGTH_EXTRA_BITS[insertCode];
         }
 
         public int copyExtra() {
-            return Constants.COPY_LENGTH_EXTRA_BITS[copyCode()];
+            return Constants.COPY_LENGTH_EXTRA_BITS[copyCode];
         }
 
         public int insertBase() {
-            return Constants.INSERT_LENGTH_BASE[insertCode()];
+            return Constants.INSERT_LENGTH_BASE[insertCode];
         }
 
         public int copyBase() {
-            return Constants.COPY_LENGTH_BASE[copyCode()];
+            return Constants.COPY_LENGTH_BASE[copyCode];
+        }
+    }
+
+    public static int getCommandSymbol(int insertCode, int copyCode, boolean isImplicitDistance) {
+        if (isImplicitDistance) {
+            if (insertCode < 8 && copyCode < 8) {
+                return insertCode * 8 + copyCode;
+            } else if (insertCode < 8 && copyCode >= 8 && copyCode < 16) {
+                return 64 + insertCode * 8 + (copyCode - 8);
+            }
+        } else {
+            if (insertCode < 8 && copyCode < 8) {
+                return 128 + insertCode * 8 + copyCode;
+            } else if (insertCode < 8 && copyCode >= 8 && copyCode < 16) {
+                return 192 + insertCode * 8 + (copyCode - 8);
+            } else if (insertCode >= 8 && insertCode < 16 && copyCode < 8) {
+                return 256 + (insertCode - 8) * 8 + copyCode;
+            } else if (insertCode >= 8 && insertCode < 16 && copyCode >= 8 && copyCode < 16) {
+                return 320 + (insertCode - 8) * 8 + (copyCode - 8);
+            } else if (insertCode < 8 && copyCode >= 16 && copyCode < 24) {
+                return 384 + insertCode * 8 + (copyCode - 16);
+            } else if (insertCode >= 16 && insertCode < 24 && copyCode < 8) {
+                return 448 + (insertCode - 16) * 8 + copyCode;
+            } else if (insertCode >= 8 && insertCode < 16 && copyCode >= 16 && copyCode < 24) {
+                return 512 + (insertCode - 8) * 8 + (copyCode - 16);
+            } else if (insertCode >= 16 && insertCode < 24 && copyCode >= 8 && copyCode < 16) {
+                return 576 + (insertCode - 16) * 8 + (copyCode - 8);
+            } else if (insertCode >= 16 && insertCode < 24 && copyCode >= 16 && copyCode < 24) {
+                return 640 + (insertCode - 16) * 8 + (copyCode - 16);
+            }
+        }
+        throw new IllegalArgumentException("Invalid insertCode " + insertCode + " or copyCode " + copyCode);
+    }
+
+    private Command createCommand(int insertLength, int copyLength, int distance, byte[] insertLiterals) {
+        int insertCode = 0;
+        for (int i = Constants.INSERT_LENGTH_BASE.length - 1; i >= 0; i--) {
+            if (insertLength >= Constants.INSERT_LENGTH_BASE[i]) {
+                insertCode = i;
+                break;
+            }
         }
 
-        public int compoundSymbol() {
-            int ic = insertCode();
-            int cc = copyCode();
-            if (ic < 8 && cc < 8) return ic * 8 + cc;
-            if (ic < 8 && cc >= 8 && cc < 16) return 64 + (cc - 8) * 8 + ic;
-            if (ic < 8 && cc >= 16) return 128 + (cc - 16) * 8 + ic;
-            if (ic >= 8 && ic < 16 && cc < 8) return 192 + (ic - 8) * 8 + cc;
-            if (ic >= 8 && ic < 16 && cc >= 8 && cc < 16) return 256 + (ic - 8) * 8 + (cc - 8);
-            if (ic >= 8 && ic < 16 && cc >= 16) return 320 + (ic - 8) * 8 + (cc - 16);
-            if (ic >= 16 && cc < 8) return 384 + (ic - 16) * 8 + cc;
-            if (ic >= 16 && cc >= 8 && cc < 16) return 448 + (ic - 16) * 8 + (cc - 8);
-            return 512 + (ic - 16) * 8 + (cc - 16);
+        int copyCode = 0;
+        for (int i = Constants.COPY_LENGTH_BASE.length - 1; i >= 0; i--) {
+            if (copyLength >= Constants.COPY_LENGTH_BASE[i]) {
+                copyCode = i;
+                break;
+            }
         }
+
+        int distCode = 0;
+        int distExtra = 0;
+        int distExtraBits = 0;
+        boolean isImplicit = false;
+
+        if (distance > 0) {
+            if (distance == recentDistances[0]) {
+                distCode = 0;
+                isImplicit = true;
+            } else if (distance == recentDistances[1]) {
+                distCode = 1;
+            } else if (distance == recentDistances[2]) {
+                distCode = 2;
+            } else if (distance == recentDistances[3]) {
+                distCode = 3;
+            } else {
+                int dcode = 0;
+                boolean found = false;
+                for (int dc = 0; dc < 48; dc++) {
+                    int ndb = 1 + (dc >> 1);
+                    int hc = dc & 1;
+                    int offset = ((2 + hc) << ndb) - 4;
+                    int maxExtra = (1 << ndb) - 1;
+                    int minDist = offset + 1;
+                    int maxDist = offset + maxExtra + 1;
+                    if (distance >= minDist && distance <= maxDist) {
+                        distCode = 16 + dc;
+                        distExtra = distance - minDist;
+                        distExtraBits = ndb;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    distCode = 16 + 47;
+                    distExtra = 0;
+                    distExtraBits = 24;
+                }
+            }
+
+            if (distCode == 1) {
+                int temp = recentDistances[1];
+                recentDistances[1] = recentDistances[0];
+                recentDistances[0] = temp;
+            } else if (distCode == 2) {
+                int temp = recentDistances[2];
+                recentDistances[2] = recentDistances[1];
+                recentDistances[1] = recentDistances[0];
+                recentDistances[0] = temp;
+            } else if (distCode == 3) {
+                int temp = recentDistances[3];
+                recentDistances[3] = recentDistances[2];
+                recentDistances[2] = recentDistances[1];
+                recentDistances[1] = recentDistances[0];
+                recentDistances[0] = temp;
+            } else if (distCode >= 4) {
+                recentDistances[3] = recentDistances[2];
+                recentDistances[2] = recentDistances[1];
+                recentDistances[1] = recentDistances[0];
+                recentDistances[0] = distance;
+            }
+        } else {
+            isImplicit = true;
+        }
+
+        int icSymbol = getCommandSymbol(insertCode, copyCode, isImplicit);
+
+        return new Command(
+            insertLength,
+            copyLength,
+            distance,
+            insertLiterals,
+            insertCode,
+            copyCode,
+            icSymbol,
+            distCode,
+            distExtra,
+            distExtraBits
+        );
     }
 
     public MetaBlockBuilder() {
@@ -93,6 +206,10 @@ public final class MetaBlockBuilder {
         this.quality = quality;
         this.literalCount = 0;
         this.commandCount = 0;
+        this.recentDistances[0] = 16;
+        this.recentDistances[1] = 15;
+        this.recentDistances[2] = 11;
+        this.recentDistances[3] = 4;
         this.totalOutputSize = 0;
         this.simpleLitMap = null;
         Arrays.fill(litFreq, 0);
@@ -145,19 +262,19 @@ public final class MetaBlockBuilder {
             literalCount = 0;
         }
 
-        Command cmd = new Command(insertLit.length, copyLength, distance, insertLit);
+        Command cmd = createCommand(insertLit.length, copyLength, distance, insertLit);
         if (commandCount >= commands.length) {
             commands = Arrays.copyOf(commands, commands.length * 2);
         }
         commands[commandCount++] = cmd;
 
-        int icSymbol = cmd.compoundSymbol();
+        int icSymbol = cmd.icSymbol();
         if (icSymbol < icFreq.length) {
             icFreq[icSymbol]++;
         }
 
-        if (distance > 0 && distance < distFreq.length) {
-            int distCode = distanceToCode(distance);
+        if (distance > 0 && icSymbol >= 128) {
+            int distCode = cmd.distCode();
             if (distCode < distFreq.length) {
                 distFreq[distCode]++;
             }
@@ -172,16 +289,17 @@ public final class MetaBlockBuilder {
             for (int i = 0; i < literalCount; i++) {
                 insertLit[i] = (byte) literals[i];
             }
-            Command cmd = new Command(literalCount, 2, 1, insertLit);
+            Command cmd = createCommand(literalCount, 2, 1, insertLit);
             if (commandCount >= commands.length) {
                 commands = Arrays.copyOf(commands, commands.length * 2);
             }
             commands[commandCount++] = cmd;
-            int icSymbol = cmd.compoundSymbol();
+            int icSymbol = cmd.icSymbol();
             if (icSymbol < icFreq.length) icFreq[icSymbol]++;
-            distanceEncode(1);
-            int flushDistCode = distTemp[0];
-            if (flushDistCode < distFreq.length) distFreq[flushDistCode]++;
+            if (icSymbol >= 128) {
+                int distCode = cmd.distCode();
+                if (distCode < distFreq.length) distFreq[distCode]++;
+            }
             literalCount = 0;
         }
 
@@ -292,7 +410,7 @@ public final class MetaBlockBuilder {
             if (nsym == 4) writer.writeBit(0);
         } else {
             writer.writeBits(0, 2);
-            writeContextMapComplexCode(writer, mapTreeReusable, alphabetSize);
+            writeComplexPrefixCode(writer, mapTreeReusable, alphabetSize);
         }
 
         for (int value : map) {
@@ -303,48 +421,10 @@ public final class MetaBlockBuilder {
         writer.writeBit(0); // IMTF = 0
     }
 
-    private void writeContextMapComplexCode(BitWriter writer, HuffmanTreeBuilder tree, int alphabetSize) {
-        int[] lengths = tree.getCodeLengths();
-        int lastNonZero = -1;
-        for (int i = 0; i < alphabetSize; i++) {
-            if (lengths[i] > 0) lastNonZero = i;
-        }
-        if (lastNonZero < 0) return;
-
-        int[] clFreq = new int[19];
-        for (int i = 0; i <= lastNonZero; i++) {
-            int len = lengths[i];
-            if (len < clFreq.length) clFreq[len]++;
-        }
-
-        int[] clCodeLengths = new int[18];
-        buildClCodeLengths(clFreq, clCodeLengths);
-
-        for (int i = 0; i < 18; i++) {
-            int orderSym = Constants.CODE_LENGTH_ORDER[i];
-            writeFixedCodeLengthValue(writer, clCodeLengths[orderSym]);
-        }
-
-        int nonZeroCl = 0;
-        for (int i = 0; i < 18; i++) {
-            if (clCodeLengths[i] > 0) nonZeroCl++;
-        }
-        if (nonZeroCl >= 2) {
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        } else if (nonZeroCl == 1) {
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        } else {
-            clCodeLengths[0] = 1;
-            clTreeReusable.buildFromLengths(clCodeLengths, 18);
-        }
-
-        encodeLengthsWithClTree(writer, clTreeReusable, lengths, lastNonZero);
-    }
-
     private void writeCommands(BitWriter writer) {
         for (int ci = 0; ci < commandCount; ci++) {
             Command cmd = commands[ci];
-            int icSymbol = cmd.compoundSymbol();
+            int icSymbol = cmd.icSymbol();
             int icBits = icTree.getCodeLength(icSymbol);
             if (icBits > 0) {
                 writer.writeBitsReversed(icTree.getCode(icSymbol), icBits);
@@ -382,11 +462,10 @@ public final class MetaBlockBuilder {
                 }
             }
 
-            if (icSymbol < 64 || icSymbol >= 128) {
-                int[] distEnc = distanceEncode(cmd.distance());
-                int distCode = distEnc[0];
-                int distExtra = distEnc[1];
-                int distExtraBits = distEnc[2];
+            if (icSymbol >= 128) {
+                int distCode = cmd.distCode();
+                int distExtra = cmd.distExtra();
+                int distExtraBits = cmd.distExtraBits();
                 int distBits = distTree.getCodeLength(distCode);
                 if (distBits > 0) {
                     writer.writeBitsReversed(distTree.getCode(distCode), distBits);
@@ -487,7 +566,7 @@ public final class MetaBlockBuilder {
             }
         } else {
             simpleLitMap = null;
-            writer.writeBits(3, 2);
+            writer.writeBits(0, 2); // HSKIP = 0
             writeComplexPrefixCode(writer, tree, alphabetSize);
         }
     }
@@ -499,11 +578,43 @@ public final class MetaBlockBuilder {
             if (lengths[i] > 0) lastNonZero = i;
         }
         if (lastNonZero < 0) return;
-        int symCount = lastNonZero + 1;
-        writer.writeBits(symCount, 16);
-        for (int i = 0; i < symCount; i++) {
-            writer.writeBits(Math.min(lengths[i], 15), 4);
+
+        int[] clFreq = new int[18];
+        for (int i = 0; i <= lastNonZero; i++) {
+            int len = lengths[i];
+            if (len >= 0 && len < clFreq.length) clFreq[len]++;
         }
+
+        int[] clCodeLengths = new int[18];
+        buildClCodeLengths(clFreq, clCodeLengths);
+
+        int space = 32;
+        for (int i = 0; i < 18; i++) {
+            int orderSym = Constants.CODE_LENGTH_ORDER[i];
+            int cl = clCodeLengths[orderSym];
+            writeFixedCodeLengthValue(writer, cl);
+            if (cl > 0) {
+                space -= (32 >> cl);
+                if (space <= 0) {
+                    break;
+                }
+            }
+        }
+
+        int nonZeroCl = 0;
+        for (int i = 0; i < 18; i++) {
+            if (clCodeLengths[i] > 0) nonZeroCl++;
+        }
+        if (nonZeroCl >= 2) {
+            clTreeReusable.buildFromLengths(clCodeLengths, 18);
+        } else if (nonZeroCl == 1) {
+            clTreeReusable.buildFromLengths(clCodeLengths, 18);
+        } else {
+            clCodeLengths[0] = 1;
+            clTreeReusable.buildFromLengths(clCodeLengths, 18);
+        }
+
+        encodeLengthsWithClTree(writer, clTreeReusable, lengths, lastNonZero);
     }
 
     private void buildClCodeLengths(int[] clFreq, int[] clCodeLengths) {
@@ -654,14 +765,12 @@ public final class MetaBlockBuilder {
     }
 
     private void writeFixedCodeLengthValue(BitWriter writer, int value) {
-        // Brotli fixed prefix code for CL code lengths (RFC 7932).
-        // MSB-first codes, written LSB-first: 0=00, 4=01, 3=10, 2=0110, 1=0111, 5=1111
         switch (value) {
             case 0: writer.writeBits(0, 2); break;
-            case 4: writer.writeBits(2, 2); break;
-            case 3: writer.writeBits(1, 2); break;
-            case 2: writer.writeBits(6, 4); break;
-            case 1: writer.writeBits(14, 4); break;
+            case 1: writer.writeBits(7, 4); break;
+            case 2: writer.writeBits(3, 3); break;
+            case 3: writer.writeBits(2, 2); break;
+            case 4: writer.writeBits(1, 2); break;
             case 5: writer.writeBits(15, 4); break;
             default: writer.writeBits(0, 2); break;
         }

@@ -162,13 +162,24 @@ public final class HuffmanDecoder {
             }
         }
 
-        // Collect symbols by decreasing code length so longer codes
-        // take priority over shorter codes that share the same prefix.
+        // Track the maximum code length that maps to each primary index.
+        // This lets us allocate the correct subtable size beforehand.
+        int[] maxLenForIndex = new int[TABLE_SIZE];
+        for (int sym = 0; sym < alphabetSize; sym++) {
+            int len = codeLengths[sym];
+            if (len > TABLE_BITS) {
+                int primaryIndex = reversedCodes[sym] & (TABLE_SIZE - 1);
+                maxLenForIndex[primaryIndex] = Math.max(maxLenForIndex[primaryIndex], len);
+            }
+        }
+
+        // Sort symbols by increasing code length so longer codes
+        // are processed later and correctly overwrite shorter codes.
         java.util.ArrayList<Integer> ordered = new java.util.ArrayList<>();
         for (int i = 0; i < alphabetSize; i++) {
             if (codeLengths[i] > 0) ordered.add(i);
         }
-        ordered.sort((a, b) -> Integer.compare(codeLengths[b], codeLengths[a]));
+        ordered.sort((a, b) -> Integer.compare(codeLengths[a], codeLengths[b]));
 
         for (int sym : ordered) {
             int len = codeLengths[sym];
@@ -196,9 +207,14 @@ public final class HuffmanDecoder {
                 int primaryIndex = revCode & (TABLE_SIZE - 1);
                 int current = table[primaryIndex];
                 if ((current & ENTRY_MASK_FLAG) == 0) {
-                    int subBits = Math.min(len - TABLE_BITS, MAX_SUBTABLE_BITS);
+                    int subBits = Math.min(maxLenForIndex[primaryIndex] - TABLE_BITS, MAX_SUBTABLE_BITS);
                     int subOff = allocateSubTable(subBits);
                     int subEntry = subOff | (subBits << SUBTABLE_SHIFT_BITS) | ENTRY_MASK_FLAG;
+                    // Initialize the new subtable with the existing primary entry
+                    int subSize = 1 << subBits;
+                    for (int i = 0; i < subSize; i++) {
+                        table[subOff + i] = current;
+                    }
                     table[primaryIndex] = subEntry;
                     current = subEntry;
                 }
@@ -238,24 +254,20 @@ public final class HuffmanDecoder {
         return Integer.reverse(value) >>> (32 - numBits);
     }
 
-    /** Read flat prefix code: symCount (16 bits) + code lengths as 4-bit values. */
-    public static HuffmanDecoder readFlatPrefixCode(BitReader reader, int alphabetSize) {
-        int symCount = reader.readBitsInt(16);
-        int[] resultLengths = new int[alphabetSize];
-        for (int i = 0; i < symCount; i++) {
-            resultLengths[i] = reader.readBitsInt(4);
-        }
-        HuffmanDecoder result = new HuffmanDecoder();
-        result.buildFromCodeLengths(resultLengths, alphabetSize);
-        return result;
-    }
-
     /** Read a complex prefix code from the bit reader. */
     public static HuffmanDecoder readComplexPrefixCode(BitReader reader, int alphabetSize, int hskip) {
         int[] clCodeLengths = new int[Constants.CODE_LENGTH_CODES];
         int startIdx = hskip;
+        int clSpace = 32;
         for (int i = startIdx; i < 18; i++) {
-            clCodeLengths[Constants.CODE_LENGTH_ORDER[i]] = readCodeLengthSymbol(reader);
+            int codeLen = readCodeLengthSymbol(reader);
+            clCodeLengths[Constants.CODE_LENGTH_ORDER[i]] = codeLen;
+            if (codeLen > 0) {
+                clSpace -= (32 >> codeLen);
+                if (clSpace <= 0) {
+                    break;
+                }
+            }
         }
 
         int nonZeroCount = 0;
@@ -274,77 +286,49 @@ public final class HuffmanDecoder {
             clDecoder.buildFromCodeLengths(clCodeLengths, Constants.CODE_LENGTH_CODES);
         }
 
-        // Read encoded symbol count
-        int symCount = reader.readBitsInt(16);
-
         int[] resultLengths = new int[alphabetSize];
         int idx = 0;
         int prevValue = 8;
-        int prevRepeat = 0;
+        int repeat = 0;
+        int repeatCodeLen = 0;
         int space = 32768;
-        boolean lastWas16 = false;
-        boolean lastWas17 = false;
 
-        while (idx < alphabetSize) {
-            if (idx >= symCount) {
-                resultLengths[idx++] = 0;
-                continue;
-            }
+        while (idx < alphabetSize && space > 0) {
             int sym = clDecoder.decodeSymbol(reader);
 
             if (sym < 16) {
+                repeat = 0;
                 resultLengths[idx++] = sym;
                 if (sym > 0) {
                     prevValue = sym;
                     space -= 32768 >> sym;
                 }
-                prevRepeat = 0;
-                lastWas16 = false;
-                lastWas17 = false;
-            } else if (sym == 16) {
-                int extra = reader.readBitsInt(2);
-                int repeat;
-                if (!lastWas16) {
-                    repeat = 3 + extra;
-                } else {
-                    repeat = 4 * (prevRepeat - 2) + (3 + extra);
+            } else { // sym == 16 or 17
+                int extraBits = (sym == 16) ? 2 : 3;
+                int repeatDelta = reader.readBitsInt(extraBits);
+                int newLen = (sym == 16) ? prevValue : 0;
+                if (repeatCodeLen != newLen) {
+                    repeat = 0;
+                    repeatCodeLen = newLen;
                 }
-                if (prevValue == 0) prevValue = 8;
-                prevRepeat = repeat;
-                int maxRepeat = Math.min(repeat, alphabetSize - idx);
-                for (int j = 0; j < maxRepeat; j++) {
-                    resultLengths[idx++] = prevValue;
-                    space -= 32768 >> prevValue;
+                int oldRepeat = repeat;
+                if (repeat > 0) {
+                    repeat -= 2;
+                    repeat <<= extraBits;
                 }
-                lastWas16 = true;
-                lastWas17 = false;
-            } else if (sym == 17) {
-                int extra = reader.readBitsInt(3);
-                int repeat;
-                if (!lastWas17) {
-                    repeat = 3 + extra;
-                } else {
-                    repeat = 8 * (prevRepeat - 2) + (3 + extra);
+                repeat += repeatDelta + 3;
+                int numToWrite = repeat - oldRepeat;
+                
+                if (idx + numToWrite > alphabetSize) {
+                    throw new IllegalStateException("Repeat code length extends past alphabet size");
                 }
-                prevValue = 0;
-                prevRepeat = repeat;
-                int maxRepeat = Math.min(repeat, alphabetSize - idx);
-                for (int j = 0; j < maxRepeat; j++) {
-                    resultLengths[idx++] = 0;
+                
+                for (int j = 0; j < numToWrite; j++) {
+                    resultLengths[idx++] = repeatCodeLen;
+                    if (repeatCodeLen > 0) {
+                        space -= 32768 >> repeatCodeLen;
+                    }
                 }
-                lastWas16 = false;
-                lastWas17 = true;
-            } else if (sym == 18) {
-                int extra = reader.readBitsInt(7);
-                int repeat = 11 + extra;
-                prevValue = 0;
-                prevRepeat = 0;
-                int maxRepeat = Math.min(repeat, alphabetSize - idx);
-                for (int j = 0; j < maxRepeat; j++) {
-                    resultLengths[idx++] = 0;
-                }
-                lastWas16 = false;
-                lastWas17 = false;
             }
         }
 
@@ -352,6 +336,16 @@ public final class HuffmanDecoder {
             throw new IllegalStateException(
                 "Invalid Huffman code: unused space = " + space + " (expected 0)"
             );
+        }
+
+        if (alphabetSize == 256) {
+            System.out.println("Literal tree code lengths parsed by decoder:");
+            for (int i = 0; i < 256; i++) {
+                if (resultLengths[i] > 0) {
+                    System.out.printf("%d:%d ", i, resultLengths[i]);
+                }
+            }
+            System.out.println();
         }
 
         HuffmanDecoder result = new HuffmanDecoder();
@@ -392,18 +386,19 @@ public final class HuffmanDecoder {
         return decoder;
     }
 
-    // Brotli fixed prefix code lookup table for CL code length symbols (RFC 7932).
-    // Maps 32 5-bit peek values to (symbol << 3) | bitCount.
-    // Codes: 0=00(2), 4=01(2), 3=10(2), 2=0110(4), 1=0111(4), 5=1111(4)
-    private static final int[] CL_SYMBOL_TABLE = {
-        2, 26, 34, 2, 2, 26, 20, 2, 2, 26, 34, 2, 2, 26, 12, 44,
-        2, 26, 34, 2, 2, 26, 20, 2, 2, 26, 34, 2, 2, 26, 12, 44
+    // Brotli fixed prefix code lookup table for CL code length symbols (RFC 7932 Section 3.5).
+    private static final int[] kCodeLengthPrefixLength = {
+        2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4
+    };
+    private static final int[] kCodeLengthPrefixValue = {
+        0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5
     };
 
     private static int readCodeLengthSymbol(BitReader reader) {
-        int peek = (int)reader.peekBits(5);
-        int entry = CL_SYMBOL_TABLE[peek];
-        reader.skipBits(entry & 0x7);
-        return entry >>> 3;
+        int peek = reader.peekBitsInt(4);
+        int len = kCodeLengthPrefixLength[peek];
+        int val = kCodeLengthPrefixValue[peek];
+        reader.skipBits(len);
+        return val;
     }
 }

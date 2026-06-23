@@ -15,32 +15,33 @@ public class PerformanceTest {
     void throughputTest() {
         byte[] data = new byte[10_000];
         new Random(42).nextBytes(data);
-        BrotjliEncoder enc = new BrotjliEncoder();
-        BrotjliDecoder dec = new BrotjliDecoder();
+        try (BrotjliEncoder enc = new BrotjliEncoder();
+             BrotjliDecoder dec = new BrotjliDecoder()) {
 
-        int warmupIterations = 3;
-        for (int i = 0; i < warmupIterations; i++) {
-            byte[] compressed = enc.encode(data, 1);
-            byte[] decompressed = dec.decode(compressed);
-            assertArrayEquals(data, decompressed);
-            enc.reset();
-            dec.reset();
-        }
+            int warmupIterations = 3;
+            for (int i = 0; i < warmupIterations; i++) {
+                byte[] compressed = enc.encode(data, 1);
+                byte[] decompressed = dec.decode(compressed);
+                assertArrayEquals(data, decompressed);
+                enc.reset();
+                dec.reset();
+            }
 
-        int iterations = 10;
-        long start = System.nanoTime();
-        for (int i = 0; i < iterations; i++) {
-            byte[] compressed = enc.encode(data, 1);
-            byte[] decompressed = dec.decode(compressed);
-            assertArrayEquals(data, decompressed);
-            enc.reset();
-            dec.reset();
+            int iterations = 10;
+            long start = System.nanoTime();
+            for (int i = 0; i < iterations; i++) {
+                byte[] compressed = enc.encode(data, 1);
+                byte[] decompressed = dec.decode(compressed);
+                assertArrayEquals(data, decompressed);
+                enc.reset();
+                dec.reset();
+            }
+            long elapsed = System.nanoTime() - start;
+            long bytesProcessed = (long) iterations * data.length * 2;
+            long throughput = bytesProcessed * 1_000_000_000L / elapsed;
+            assertTrue(throughput > 0, "Throughput should be measurable");
+            assertTrue(elapsed > 0, "Elapsed time should be measurable");
         }
-        long elapsed = System.nanoTime() - start;
-        long bytesProcessed = (long) iterations * data.length * 2;
-        long throughput = bytesProcessed * 1_000_000_000L / elapsed;
-        assertTrue(throughput > 0, "Throughput should be measurable");
-        assertTrue(elapsed > 0, "Elapsed time should be measurable");
     }
 
     @Test
@@ -61,16 +62,19 @@ public class PerformanceTest {
             for (int i = 0; i < numTasks; i++) {
                 final int taskId = i;
                 Thread.ofVirtual().start(() -> {
+                    BrotjliEncoder enc = null;
                     try {
-                        BrotjliEncoder enc = pool.borrow();
+                        enc = pool.borrow();
                         byte[] compressed = enc.encode(testData[taskId], 1);
                         byte[] decompressed = Brotjli.decompress(compressed);
                         assertArrayEquals(testData[taskId], decompressed);
-                        pool.release(enc);
                         successCount.incrementAndGet();
                     } catch (Exception e) {
                         fail("Task " + taskId + " failed: " + e.getMessage());
                     } finally {
+                        if (enc != null) {
+                            pool.release(enc);
+                        }
                         latch.countDown();
                     }
                 });
